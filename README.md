@@ -1,0 +1,243 @@
+# 小红书开放平台 - 多店铺订单状态查询服务
+
+基于 Node.js + Express + SQLite，封装小红书电商开放平台（商家自研应用）的授权与订单查询能力：
+
+1. 一个应用支持多个店铺授权（平台上限 10 个，超出需工单白名单）
+2. 自动维护每个店铺的 accessToken / refreshToken（到期前自动刷新、调用时自动恢复）
+3. 提供「店铺ID / 店铺标识 + 订单号」查询订单状态的标准接口，以及订单列表接口
+4. 成功订单监听：每 10 秒轮询所有已授权店铺最近 30 分钟"更新"的已完成订单（自动分页），启动时回填最近 60 分钟
+5. 成功订单上报：去重入库（sellerId+orderId 唯一），失败自动重试 3 次；上报接口待定（TODO），当前在日志打印上报参数
+6. 授权回调：控制台回调地址指向本服务 `/callback/xhs/oauth` 后，主账号授权一次即自动接收 code、换 token、持久化，全程有日志
+
+## 快速开始
+
+```bash
+npm install
+npm start          # http://127.0.0.1:8899
+npm test           # 校验签名算法与官方示例一致
+```
+
+配置在 `.env`（应用级凭证）：
+
+| 变量 | 说明 |
+|---|---|
+| `APP_ID` | 控制台-应用管理-应用详情 的 AppId |
+| `APP_SECRET` | 应用详情页点"显示"查看 |
+| `APP_REDIRECT_URI` | 与开放平台控制台配置的应用授权回调地址一致 |
+| `XHS_GATEWAY` | 生产默认 `https://ark.xiaohongshu.com/ark/open_api/v3/common_controller` |
+
+## 哪些参数需要长期维护（对照文档）
+
+| 参数 | 维护方式 |
+|---|---|
+| `appId` / `appSecret` / `redirectUri` | **长期固定**，写在 `.env`，启动时自动同步进 DB（`apps` 表）。App Secret 重置后需同步更新 |
+| `method` / `version` | 代码内固定，`version=2.0` |
+| `timestamp` / `sign` | **每次请求动态计算**，无需维护。`sign = md5(method + "?" + 按字典序排列的 appId/timestamp/version + appSecret)`，accessToken 不参与签名 |
+| 每店铺 `accessToken` | **自动维护**（`credentials` 表）：授权时入库；快过期（默认提前10分钟）由后台调度自动用 refreshToken 刷新；调用中遇到失效会即时刷新重试一次 |
+| 每店铺 `refreshToken` | 刷新时随平台响应更新入库（平台每次刷新都会下发新的 refreshToken 并重置授权到期时间） |
+| 店铺映射 | `stores` 表：sellerId（平台店铺ID）+ 自定义 storeCode（业务标识），支持两种方式查询 |
+
+## 接口清单
+
+### 关键概念
+
+| 概念 | 说明 | 示例 |
+|---|---|---|
+| `sellerId` | 小红书**店铺ID**（平台唯一标识），控制台-授权管理可查看，或千帆后台→店铺→店铺账号信息 | `6a8975834a2c710015a232d3` |
+| `storeCode` | 本服务注册店铺时设置的自定义标识，与 sellerId 等价使用，二选一 | `maimai` |
+| `orderId` | 订单号（以 P 开头），由订单列表接口返回 | `P810431500196403651` |
+| 时间参数 | 由**后端自动计算**（lastHours/lastMinutes），前端无需传 Unix 时间戳 | - |
+
+### 1. 订单状态查询（核心接口）
+
+```
+GET /api/order/status?sellerId=xxx&orderId=Pxxxx
+GET /api/order/status?storeCode=maimai&orderId=Pxxxx
+```
+
+响应示例：
+
+```json
+{
+  "success": true,
+  "data": {
+    "store": { "sellerId": "68c11b4b047ce6002a1f33c6", "storeCode": "testshop", "name": "测试店铺" },
+    "orderId": "P810431500196403651",
+    "orderStatus": 6,
+    "orderStatusText": "待收货",
+    "orderAfterSalesStatus": 1,
+    "orderAfterSalesStatusText": "无售后",
+    "cancelStatus": 0,
+    "createdTime": 1794879512753,
+    "paidTime": 1794879513000,
+    "updateTime": 1794882548829,
+    "expressTrackingNo": null,
+    "detail": { "...": "平台原始完整字段" }
+  }
+}
+```
+
+### 2. 订单列表
+
+```
+POST /api/order/list
+{ "sellerId": "xxx", "lastHours": 24, "orderStatus": 0, "pageNo": 1, "pageSize": 50 }
+```
+
+时间参数**由后端计算**，前端只需传查多少小时内的订单：
+
+```json
+{ "storeCode": "maimai", "lastHours": 24 }      // 最近24小时内创建/更新的订单（默认24，≤24）
+{ "sellerId": "xxx", "lastMinutes": 30 }        // 最近30分钟内"更新过"的订单（≤30，用于增量拉取）
+```
+
+完整入参说明：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `sellerId` / `storeCode` | string | 二选一 | 店铺ID / 自定义店铺标识 |
+| `lastHours` | number | 否 | 查最近 N 小时的订单，默认 24，上限 24（平台限制，按创建时间） |
+| `lastMinutes` | number | 否 | 查最近 N 分钟"更新过"的订单，上限 30（平台限制，按更新时间） |
+| `orderType` | number | 否 | 订单类型：0全部 1现货 2定金预售 3全款预售(废弃) 4全款预售(新) 5换货补发 |
+| `orderStatus` | number | 否 | 订单状态过滤，0全部，其余见下方状态码对照 |
+| `pageNo` | number | 否 | 页码，默认 1 |
+| `pageSize` | number | 否 | 每页数量，默认 50，上限 100 |
+| `startTime` / `endTime` / `timeType` | number | 否 | 兼容旧用法：显式指定 Unix 秒级时间范围，timeType=1 创建时间(窗口≤24h)、2 更新时间(窗口≤30min) |
+
+响应中的 `query` 字段会返回后端实际计算的时间窗口，便于核对。
+
+### 3. 授权相关| 接口 | 说明 |
+|---|---|
+| `GET /api/stores/:sellerId/auth-url` | 生成店铺授权链接（发给店铺主账号打开） |
+| `GET /callback/xhs/oauth?code=xxx` | 控制台回调地址指向本服务时接收 code 自动换 token |
+| `POST /api/oauth/exchange` `{code}` | **手动换 token**：现有订单系统回调里收到 code 后调用此接口完成托管 |
+| `POST /api/stores/:sellerId/refresh` | 手动强制刷新某店铺 token |
+| `POST /api/token/sweep` | 立即触发一轮全部店铺 token 扫描刷新 |
+| `GET /api/stores/:sellerId/token` | 取当前有效 accessToken（供业务后端同步） |
+| `GET /api/order-events` | 查看已捕获的成功订单事件及上报状态（0待上报 1上报中 2上报成功 3最终失败） |
+
+### 5. 成功订单监听与上报（自动运行）
+
+无需手动调用，服务启动后自动运行：
+
+```
+启动回填：最近 60 分钟的已完成订单（30 分钟切片，自动翻页）
+轮询：每 10 秒 × 所有已授权店铺 × 最近 30 分钟更新的 orderStatus=7（已完成）订单
+去重：sellerId + orderId 唯一（order_events 表），重复轮询不会重复上报
+上报：失败重试 3 次（间隔 2s/4s 递增）；3 次仍失败标记最终失败并定期兜底重试
+```
+
+上报参数结构（TODO：接口待定，当前打印在日志，`REPORT_URL` 配置后自动 POST 该结构）：
+
+```json
+{
+  "sellerId": "6a8975834a2c710015a232d3",
+  "appId": "a1e389d4fbcc47188600",
+  "orderId": "P810393225302270041",
+  "orderStatus": 7,
+  "order": { "...": "平台订单完整字段" }
+}
+```
+
+相关配置（.env）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `MONITOR_INTERVAL_MS` | 10000 | 轮询间隔，每 10 秒 |
+| `MONITOR_WINDOW_MINUTES` | 30 | 每次轮询的更新时间窗口（平台上限 30 分钟） |
+| `MONITOR_BACKFILL_MINUTES` | 60 | 启动时回填最近多少分钟 |
+| `REPORT_URL` | 空 | 上报接口地址，待定；空则仅打印日志 |
+| `REPORT_RETRY_TIMES` | 3 | 上报失败重试次数 |
+| `REPORT_RETRY_BACKOFF_MS` | 2000 | 重试间隔基数 |
+
+### 4. 店铺/应用管理
+
+| 接口 | 说明 |
+|---|---|
+| `POST /api/stores` `{sellerId, storeCode, name}` | 注册店铺（sellerId 必填，storeCode 为自定义标识） |
+| `GET /api/stores` | 店铺列表（含 token 有效性） |
+| `DELETE /api/stores/:sellerId` | 删除店铺及其凭证 |
+| `POST /api/apps` `{appId, appSecret, redirectUri, name}` | 注册更多应用（多应用场景） |
+
+## 真实店铺授权步骤
+
+1. 控制台 → 应用管理 → 授权管理 → 输入店铺 ID（千帆-店铺账号信息里的 sellerId）→ 添加授权店铺
+2. 获取授权链接（或本服务 `GET /api/stores/:sellerId/auth-url`），发给店铺**主账号**在浏览器打开并点授权
+3. 平台 302 跳转到回调地址并携带 `code`（10 分钟有效）
+   - 若回调指向本服务：自动换 token 入库
+   - 若回调指向你的订单系统 `https://ark.xiaohongshu.com/app-order/order/query`：在该页面解析出 `code` 后调用本服务 `POST /api/oauth/exchange` 完成托管
+4. 之后 token 全程自动维护，直接调订单接口即可
+
+## 订单状态码对照（orderStatus）
+
+| 值 | 状态 | 值 | 状态 |
+|---|---|---|---|
+| 1 | 已下单待付款 | 6 | 待收货 |
+| 2 | 已支付处理中 | 7 | 已完成 |
+| 3 | 清关中 | 8 | 已关闭 |
+| 4 | 待发货 | 9 | 已取消 |
+| 5 | 部分发货 | 10 | 换货申请中 |
+
+售后状态（orderAfterSalesStatus）：1 无售后 / 2 售后处理中 / 3 售后完成 / 4 售后拒绝 / 5 售后关闭 / 6 平台介入中 / 7 售后取消
+取消申请（cancelStatus）：0 未申请取消 / 1 取消处理中
+
+## curl 测试示例（PowerShell）
+
+```powershell
+# 订单列表：最近24小时，最多10条（时间由后端算）
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8899/api/order/list `
+  -ContentType 'application/json' `
+  -Body '{"sellerId":"68c11b4b047ce6002a1f33c6","lastHours":24,"pageSize":10}' | ConvertTo-Json -Depth 5
+
+# 订单状态：按店铺标识+订单号
+Invoke-RestMethod -Uri "http://127.0.0.1:8899/api/order/status?storeCode=testshop&orderId=P810431500196403651" | ConvertTo-Json -Depth 3
+
+# 订单状态：按店铺ID+订单号
+Invoke-RestMethod -Uri "http://127.0.0.1:8899/api/order/status?sellerId=68c11b4b047ce6002a1f33c6&orderId=P810431500196403651" | ConvertTo-Json -Depth 3
+```
+
+## ApiPost 一键导入
+
+项目根目录提供两个文件：
+
+1. `小红书订单API.postman_collection.json` — 接口集合（已按文件夹分组）
+2. `小红书订单API环境.postman_environment.json` — 环境变量
+
+导入步骤：ApiPost 客户端 → 导入 → Postman 格式 → 依次导入上面两个文件 → 右上角环境切换选择「小红书订单API-本地环境」。
+
+集合分组：`1-基础`、`2-店铺管理`、`3-授权与Token`、`4-订单查询`。
+
+环境变量（可在 ApiPost 环境管理里修改）：`baseUrl`、`appId`、`sellerId`、`storeCode`、`storeName`、`orderId`、`authCode`。
+
+## PM2 部署
+
+```powershell
+# 1. 全局安装 PM2（一次性）
+npm install -g pm2
+
+# 2. 进入项目目录，启动（会读取 ecosystem.config.js）
+cd C:\Users\User\code\xhs-order-api
+npm run pm2:start
+
+# 3. 常用命令
+npm run pm2:logs      # 查看日志
+npm run pm2:restart   # 重启（改代码后）
+npm run pm2:stop      # 停止
+npm run pm2:delete    # 从 PM2 移除
+pm2 save              # 保存当前进程列表（重启机器后 pm2 resurrect 恢复）
+pm2 status            # 查看状态
+```
+
+说明：
+
+- `ecosystem.config.js` 已配置：进程名 `xhs-order-api`、崩溃自动重启、内存超 300M 自动重启、日志输出到 `logs/out.log` 与 `logs/error.log`
+- Windows 下 PM2 不支持 cluster 模式，配置为 `fork` 单实例；如需多实例请在 Linux 服务器上改 `instances: 2` + `exec_mode: 'cluster'`
+- 开机自启（Windows）：`npm install -g pm2-installer` 后运行 `pm2-installer install`（会自动安装 Windows 服务并执行 pm2 save 的列表）；Linux：`pm2 startup` + `pm2 save`
+
+## 已验证（生产网关实测）
+
+- [x] 签名算法与官方示例一致（`npm test`）
+- [x] 测试店铺 code 换取 accessToken 成功
+- [x] `oauth.refreshToken` 刷新成功并更新有效期（约 7 天）
+- [x] `order.getOrderList` 返回真实订单
+- [x] `order.getOrderDetail` 按 storeCode / sellerId + 订单号查询状态成功

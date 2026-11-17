@@ -1,0 +1,233 @@
+{
+	"info": {
+		"_postman_id": "xhs-order-api-001",
+		"name": "小红书订单API服务",
+		"description": "小红书开放平台多店铺授权管理与订单状态查询服务。导入 ApiPost：导入 → Postman格式 → 本文件 + 环境文件。",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1-基础",
+			"item": [
+				{
+					"name": "健康检查",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "2-店铺管理",
+			"item": [
+				{
+					"name": "注册店铺",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sellerId\": \"{{sellerId}}\",\n  \"storeCode\": \"{{storeCode}}\",\n  \"name\": \"{{storeName}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/stores",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores"]
+						}
+					}
+				},
+				{
+					"name": "店铺列表",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stores?appId={{appId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores"],
+							"query": [
+								{ "key": "appId", "value": "{{appId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "生成店铺授权链接",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stores/{{sellerId}}/auth-url?appId={{appId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores", "{{sellerId}}", "auth-url"],
+							"query": [
+								{ "key": "appId", "value": "{{appId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "获取店铺当前accessToken",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stores/{{sellerId}}/token?appId={{appId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores", "{{sellerId}}", "token"],
+							"query": [
+								{ "key": "appId", "value": "{{appId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "删除店铺",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stores/{{sellerId}}?appId={{appId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores", "{{sellerId}}"],
+							"query": [
+								{ "key": "appId", "value": "{{appId}}" }
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "3-授权与Token",
+			"item": [
+				{
+					"name": "授权code换token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"code\": \"{{authCode}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/oauth/exchange",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "oauth", "exchange"]
+						}
+					}
+				},
+				{
+					"name": "手动刷新店铺token",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/stores/{{sellerId}}/refresh?appId={{appId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "stores", "{{sellerId}}", "refresh"],
+							"query": [
+								{ "key": "appId", "value": "{{appId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "全量token扫描刷新",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/token/sweep",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "token", "sweep"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "4-订单查询",
+			"item": [
+				{
+					"name": "订单状态-按店铺ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/order/status?sellerId={{sellerId}}&orderId={{orderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "order", "status"],
+							"query": [
+								{ "key": "sellerId", "value": "{{sellerId}}" },
+								{ "key": "orderId", "value": "{{orderId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "订单状态-按店铺标识",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/order/status?storeCode={{storeCode}}&orderId={{orderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "order", "status"],
+							"query": [
+								{ "key": "storeCode", "value": "{{storeCode}}" },
+								{ "key": "orderId", "value": "{{orderId}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "订单列表-最近24小时",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sellerId\": \"{{sellerId}}\",\n  \"lastHours\": 24,\n  \"orderStatus\": 0,\n  \"pageNo\": 1,\n  \"pageSize\": 20\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/order/list",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "order", "list"]
+						}
+					}
+				},
+				{
+					"name": "订单列表-最近30分钟更新",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"storeCode\": \"{{storeCode}}\",\n  \"lastMinutes\": 30,\n  \"pageSize\": 20\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/order/list",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "order", "list"]
+						}
+					}
+				}
+			]
+		}
+	]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "xhs-order-api",
+  "version": "1.0.0",
+  "description": "小红书开放平台多店铺授权管理与订单状态查询服务",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "test": "node test/sign.test.js",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop xhs-order-api",
+    "pm2:restart": "pm2 restart xhs-order-api",
+    "pm2:logs": "pm2 logs xhs-order-api",
+    "pm2:delete": "pm2 delete xhs-order-api"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}

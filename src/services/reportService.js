@@ -1,8 +1,104 @@
 const axios = require('axios');
 const db = require('../db');
 const config = require('../config');
+const orderMonitor = require('./orderMonitor');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fmtTime(ms) {
+  if (!ms) return '-';
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 分 → 元（两位小数），空值显示 - */
+function yuan(fen) {
+  if (fen === null || fen === undefined || fen === '' || Number.isNaN(Number(fen))) return '-';
+  return (Number(fen) / 100).toFixed(2);
+}
+
+/** 计算字符串显示宽度（中文按 2 个字符宽度），用于对齐表格 */
+function strWidth(s) {
+  let w = 0;
+  for (const ch of String(s)) w += /[\u1100-\uFFFD]/.test(ch) ? 2 : 1;
+  return w;
+}
+
+function pad(s, w) {
+  const padLen = w - strWidth(s);
+  return String(s) + (padLen > 0 ? ' '.repeat(padLen) : '');
+}
+
+/** 生成日志表格：单号 | 店铺 | 金额 | 支付时间 | 完成时间 */
+function renderOrderTable(rows) {
+  const headers = ['单号', '店铺', '金额(元)', '支付时间', '完成时间'];
+  const data = rows.map((r) => [r.orderId, r.shop, r.amount, r.paidTime, r.finishTime]);
+  const widths = headers.map((h, i) => Math.max(strWidth(h), ...data.map((d) => strWidth(d[i]))));
+
+  const border = (l, m, r) => l + widths.map((w) => '─'.repeat(w + 2)).join(m) + r;
+  const row = (cells) =>
+    '│' + cells.map((c, i) => ` ${pad(c, widths[i])} `).join('│') + '│';
+
+  const lines = [];
+  lines.push(border('┌', '┬', '┐'));
+  lines.push(row(headers));
+  lines.push(border('├', '┼', '┤'));
+  for (const d of data) lines.push(row(d));
+  lines.push(border('└', '┴', '┘'));
+  return lines.join('\n');
+}
+
+/** 从事件 payload 提取关键字段（金额来自补全的订单详情） */
+function buildSummary(event) {
+  let payload;
+  try {
+    payload = JSON.parse(event.payload || '{}');
+  } catch {
+    payload = {};
+  }
+  const detail = payload.detail || {};
+  const store = db.getStore(event.seller_id, event.app_id) || {};
+  // 金额优先级：订单实付金额 → 商家实际收款 → 定金总额
+  const amountFen = detail.totalPayAmount ?? detail.merchantActualReceiveAmount ?? detail.totalDepositAmount ?? null;
+  return {
+    sellerId: event.seller_id,
+    appId: event.app_id,
+    orderId: event.order_id,
+    orderStatus: event.order_status,
+    shopName: store.name || store.store_code || event.seller_id,
+    storeCode: store.store_code || '',
+    amountFen: amountFen === null ? null : Number(amountFen),
+    amountYuan: yuan(amountFen),
+    totalShippingFreeYuan: yuan(detail.totalShippingFree),
+    merchantActualReceiveYuan: yuan(detail.merchantActualReceiveAmount),
+    createdTime: fmtTime(payload.createdTime),
+    paidTime: fmtTime(payload.paidTime),
+    finishTime: fmtTime(payload.finishTime),
+    updateTime: fmtTime(payload.updateTime),
+    expressTrackingNo: detail.expressTrackingNo || '',
+    expressCompanyCode: detail.expressCompanyCode || '',
+    receiver: [payload.receiverProvinceName, payload.receiverCityName, payload.receiverDistrictName]
+      .filter(Boolean).join(''),
+  };
+}
+
+/** 打印一条订单的表格日志（单号/店铺/金额/时间） */
+function logOrderTable(event, summary) {
+  console.log('[report] ── 监听到成功订单，明细如下 ──');
+  console.log(renderOrderTable([
+    {
+      orderId: summary.orderId,
+      shop: `${summary.shopName}(${summary.sellerId})`,
+      amount: summary.amountYuan,
+      paidTime: summary.paidTime,
+      finishTime: summary.finishTime,
+    },
+  ]));
+  if (summary.expressTrackingNo) {
+    console.log(`[report] 快递: ${summary.expressCompanyCode || ''} ${summary.expressTrackingNo} | 收件: ${summary.receiver}`);
+  }
+}
 
 /**
  * 上报一条成功订单事件。
@@ -14,15 +110,32 @@ async function reportEvent(event) {
   const maxAttempts = config.reportRetryTimes;
   db.updateOrderEvent(event.id, { report_status: 1, attempt_count: 0 });
 
+  // 金额/快递等字段在订单详情接口才有，上报前补全（列表接口不含金额）
+  const enrichedPayload = await orderMonitor.enrichEventWithDetail(event);
+  const summary = buildSummary({ ...event, payload: JSON.stringify(enrichedPayload) });
+  logOrderTable(event, summary);
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       // TODO: 上报接口待定 —— 参数结构按下面这个 payload 对齐，接口定稿后替换此段即可
       const reportParams = {
-        sellerId: event.seller_id,
-        appId: event.app_id,
-        orderId: event.order_id,
-        orderStatus: event.order_status,
-        order: JSON.parse(event.payload || '{}'),
+        sellerId: summary.sellerId,
+        appId: summary.appId,
+        orderId: summary.orderId,
+        orderStatus: summary.orderStatus,
+        summary: {
+          shopName: summary.shopName,
+          storeCode: summary.storeCode,
+          amountFen: summary.amountFen,
+          amountYuan: summary.amountYuan,
+          totalShippingFreeYuan: summary.totalShippingFreeYuan,
+          merchantActualReceiveYuan: summary.merchantActualReceiveYuan,
+          createdTime: summary.createdTime,
+          paidTime: summary.paidTime,
+          finishTime: summary.finishTime,
+          updateTime: summary.updateTime,
+        },
+        order: enrichedPayload,
       };
 
       if (config.reportUrl) {
@@ -33,7 +146,7 @@ async function reportEvent(event) {
         });
         console.log(`[report] 上报成功 orderId=${event.order_id} sellerId=${event.seller_id} attempt=${attempt} url=${config.reportUrl}`);
       } else {
-        // 接口待定，暂时只打印上报参数
+        // 接口待定，暂时只打印上报参数（表格已在上方输出）
         console.log(`[report] TODO 接口待定，模拟上报成功 orderId=${event.order_id} attempt=${attempt} params=${JSON.stringify(reportParams)}`);
       }
 
@@ -91,4 +204,4 @@ function startReporter() {
   return processQueue();
 }
 
-module.exports = { reportEvent, processQueue, startReporter };
+module.exports = { reportEvent, processQueue, startReporter, buildSummary, renderOrderTable };

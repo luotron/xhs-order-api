@@ -149,7 +149,9 @@ POST /api/order/list
 
 响应中的 `query` 字段会返回后端实际计算的时间窗口，便于核对。
 
-### 3. 授权相关| 接口 | 说明 |
+### 3. 授权相关
+
+| 接口 | 说明 |
 |---|---|
 | `GET /api/stores/:sellerId/auth-url` | 生成店铺授权链接（发给店铺主账号打开） |
 | `GET /callback/xhs/oauth?code=xxx` | 控制台回调地址指向本服务时接收 code 自动换 token |
@@ -158,6 +160,8 @@ POST /api/order/list
 | `POST /api/token/sweep` | 立即触发一轮全部店铺 token 扫描刷新 |
 | `GET /api/stores/:sellerId/token` | 取当前有效 accessToken（供业务后端同步） |
 | `GET /api/order-events` | 查看已捕获的成功订单事件及上报状态（0待上报 1上报中 2上报成功 3最终失败） |
+| `POST /api/monitor/poll` | 手动触发一次订单轮询（运维/测试用） |
+| `POST /api/order-events/:id/report` | 手动重新上报某个事件（测试/补报用） |
 
 ### 5. 成功订单监听与上报（自动运行）
 
@@ -167,18 +171,46 @@ POST /api/order/list
 启动回填：最近 60 分钟的已完成订单（30 分钟切片，自动翻页）
 轮询：每 10 秒 × 所有已授权店铺 × 最近 30 分钟更新的 orderStatus=7（已完成）订单
 去重：sellerId + orderId 唯一（order_events 表），重复轮询不会重复上报
+补全：捕获后自动调 order.getOrderDetail 补全金额/快递等字段（订单列表接口不含金额）
 上报：失败重试 3 次（间隔 2s/4s 递增）；3 次仍失败标记最终失败并定期兜底重试
 ```
 
-上报参数结构（TODO：接口待定，当前打印在日志，`REPORT_URL` 配置后自动 POST 该结构）：
+**日志表格**：每条监听到的成功订单，日志都会输出一张明细表（单号/店铺/金额/时间）：
+
+```
+[report] ── 监听到成功订单，明细如下 ──
+┌─────────────────────┬────────────────────────────────────────┬──────────┬─────────────────────┬─────────────────────┐
+│ 单号                │ 店铺                                   │ 金额(元) │ 支付时间            │ 完成时间            │
+├─────────────────────┼────────────────────────────────────────┼──────────┼─────────────────────┼─────────────────────┤
+│ P810472712429350281 │ 麦麦皮皮的店(6a8975834a2c710015a232d3) │ 199.98   │ 2026-11-17 21:11:07 │ 2026-11-18 15:18:55 │
+└─────────────────────┴────────────────────────────────────────┴──────────┴─────────────────────┴─────────────────────┘
+[report] 快递: shentong 770360276716845 | 收件: 黑龙江省齐齐哈尔市铁锋区
+```
+
+**上报参数结构**（TODO：接口待定，当前打印在日志，`REPORT_URL` 配置后自动 POST 该结构）：
 
 ```json
 {
   "sellerId": "6a8975834a2c710015a232d3",
   "appId": "a1e389d4fbcc47188600",
-  "orderId": "P810393225302270041",
+  "orderId": "P810472712429350281",
   "orderStatus": 7,
-  "order": { "...": "平台订单完整字段" }
+  "summary": {
+    "shopName": "麦麦皮皮的店",
+    "storeCode": "maimai",
+    "amountFen": 19998,
+    "amountYuan": "199.98",
+    "totalShippingFreeYuan": "0.00",
+    "merchantActualReceiveYuan": "199.98",
+    "createdTime": "2026-11-17 21:05:12",
+    "paidTime": "2026-11-17 21:11:07",
+    "finishTime": "2026-11-18 15:18:55",
+    "updateTime": "2026-11-19 20:10:42"
+  },
+  "order": {
+    "...": "订单列表接口的完整字段（见下方字段说明）",
+    "detail": { "...": "订单详情接口补全的完整字段（金额/快递/商品明细等）" }
+  }
 }
 ```
 
@@ -223,6 +255,69 @@ POST /api/order/list
 
 售后状态（orderAfterSalesStatus）：1 无售后 / 2 售后处理中 / 3 售后完成 / 4 售后拒绝 / 5 售后关闭 / 6 平台介入中 / 7 售后取消
 取消申请（cancelStatus）：0 未申请取消 / 1 取消处理中
+
+## 监听到的订单数据字段说明
+
+`order` 对象 = 订单列表接口字段 + `detail`（订单详情接口补全字段）。所有时间字段均为毫秒时间戳，金额字段单位均为**分**。
+
+### 订单列表字段（order 顶层）
+
+| 字段 | 类型 | 说明 / 可取值 |
+|---|---|---|
+| `orderId` | string | 订单号（以 P 开头） |
+| `orderType` | integer | 订单类型：1 现货 2 定金预售 3 全款预售(废弃) 4 全款预售(新) 5 换货补发 |
+| `orderStatus` | integer | 订单状态：1 已下单待付款 2 已支付处理中 3 清关中 4 待发货 5 部分发货 6 待收货 7 已完成 8 已关闭 9 已取消 10 换货申请中 |
+| `orderAfterSalesStatus` | integer | 售后状态：1 无售后 2 售后处理中 3 售后完成 4 售后拒绝 5 售后关闭 6 平台介入中 7 售后取消 |
+| `cancelStatus` | integer | 取消申请状态：0 未申请取消 1 取消处理中 |
+| `createdTime` | integer | 创建时间（ms） |
+| `paidTime` | integer | 支付时间（ms） |
+| `updateTime` | integer | 更新时间（ms） |
+| `deliveryTime` | integer | 发货时间（ms） |
+| `finishTime` | integer | 完成时间（ms） |
+| `cancelTime` | integer | 取消时间（ms，0=未取消） |
+| `promiseLastDeliveryTime` | integer | 承诺最晚发货时间（ms） |
+| `planInfoId` / `planInfoName` | string | 物流方案 ID / 名称（如"【系统创建】物流模板默认—联系人"） |
+| `logistics` | string | 物流模式：`red_auto` 自动发货 / `red_express` 快递发货 |
+| `receiverCountryName` | string | 收件人国家（目前仅"中国"） |
+| `receiverProvinceName` / `receiverCityName` / `receiverDistrictName` | string | 收件人省 / 市 / 区（名称字段；对应 ID 字段常为空） |
+| `sellerRemarkFlag` | integer | 商家备注标记：0 无备注 1 有备注 2 其他（平台枚举） |
+| `orderTagList` | array | 订单标签：`BANK_ASSET_CUSTODY` 资产托管 `EXPLODE` 易爆特殊商品 `VIRTUAL_COUPON` 虚拟券 `NO_LOGISTICS_SHIP` 无物流发货 `SAME_DAY_DELIVERY` 当日达 `SHIPMENT_ABNORMAL` 发货异常 `LACK_GOOD` 缺货 `API_RECHARGE` 虚拟充值API履约 |
+| `xhsOpenId` | string | 买家小红书 OpenId（加密串，URL 编码） |
+| `xhsBrandId` | string | 品牌 ID（无品牌时为空字符串） |
+| `originalOrderId` | string | 换货/补发场景的原订单号（无则 null） |
+
+### 订单详情字段（order.detail，补全自 order.getOrderDetail）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `totalPayAmount` | integer | **订单实付总额（分）**——表格"金额"字段来源 |
+| `totalShippingFree` | integer | 运费（分） |
+| `merchantActualReceiveAmount` | integer | 商家实际收款（分） |
+| `totalDepositAmount` | integer | 定金总额（分，预售订单） |
+| `totalMerchantDiscount` / `totalRedDiscount` | integer | 商家优惠 / 平台优惠（分） |
+| `totalChangePriceAmount` | integer | 改价金额（分） |
+| `paymentType` | integer | 支付方式：1 在线支付（以平台文档为准） |
+| `outTradeNo` | string | 平台支付交易号 |
+| `expressCompanyCode` | string | 快递公司编码（如 `shentong`） |
+| `expressTrackingNo` | string | 快递单号 |
+| `receiverName` / `receiverPhone` / `receiverAddress` | string | 收件人姓名/电话/地址（密文或空） |
+| `skuList` | array | 商品明细：`skuName` 商品名、`skuQuantity` 数量、`skuId`、`itemId`/`itemName`、`totalPaidAmount` 该SKU实付(分)、`skuImage` 图片、`skuSpec` 规格、`erpcode` 商家编码、`kolId`/`kolName` 达人、`skuAfterSaleStatus` SKU售后状态(同售后状态枚举)、`deliveryMode` 发货模式 |
+| `simpleDeliveryOrderList` | array | 包裹明细：`deliveryOrderIndex` 包裹序号、`status` 包裹状态(7已完成)、`expressTrackingNo`、`expressCompanyCode`、`skuIdList`/`itemIdList` 包裹内商品 |
+| `shopId` / `shopName` | string | 店铺ID / 店铺名 |
+| `userId` | string | 买家用户ID |
+| `boundExtendInfo` | object | 支付扩展：`payNo`、`payChannel`、`payAmount`、`taxAmount`、`shippingFee`、`discountAmount`、`zoneCodes` |
+| `transferExtendInfo` | object | 跨境扩展：`internationalExpressNo`、`orderDeclaredAmount`、`paintMarker`、`collectionPlace`、`threeSegmentCode` |
+| `unpack` | boolean | 是否拆包裹 |
+| `logisticsMode` | integer | 物流模式（平台枚举） |
+
+### 上报摘要字段（summary）
+
+| 字段 | 说明 |
+|---|---|
+| `amountFen` / `amountYuan` | 实付金额：分 / 元（两位小数字符串） |
+| `totalShippingFreeYuan` | 运费（元） |
+| `merchantActualReceiveYuan` | 商家实际收款（元） |
+| `createdTime` / `paidTime` / `finishTime` / `updateTime` | 已格式化为 `YYYY-MM-DD HH:mm:ss` |
 
 ## curl 测试示例（PowerShell）
 

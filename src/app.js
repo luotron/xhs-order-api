@@ -4,6 +4,8 @@ const db = require('./db');
 const tokenManager = require('./services/tokenManager');
 const orderService = require('./services/orderService');
 const xhs = require('./services/xhsClient');
+const orderMonitor = require('./services/orderMonitor');
+const reportService = require('./services/reportService');
 
 const app = express();
 app.use(express.json());
@@ -187,6 +189,20 @@ app.get('/api/order-events', (req, res) => {
   res.json({ success: true, data: { count: rows.length, stats: db.countOrderEvents(), events: rows } });
 });
 
+/** 手动触发一次订单轮询（运维/测试用） */
+app.post('/api/monitor/poll', asyncH(async (req, res) => {
+  const data = await orderMonitor.pollOnce();
+  res.json({ success: true, data });
+}));
+
+/** 手动重新上报某个事件（按 id，测试/补报用） */
+app.post('/api/order-events/:id/report', asyncH(async (req, res) => {
+  const ev = db.db.prepare('SELECT * FROM order_events WHERE id = ?').get(Number(req.params.id));
+  if (!ev) return res.status(404).json({ success: false, error: '事件不存在' });
+  const ok = await reportService.reportEvent(ev);
+  res.json({ success: ok, data: { orderId: ev.order_id, ok } });
+}));
+
 // ---------- 错误处理 ----------
 app.use((err, req, res, next) => {
   if (err instanceof xhs.XhsApiError) {
@@ -208,8 +224,6 @@ if (config.defaultApp.appId && config.defaultApp.appSecret) {
 }
 
 tokenManager.startScheduler();
-const orderMonitor = require('./services/orderMonitor');
-const reportService = require('./services/reportService');
 reportService.startReporter();
 orderMonitor.startMonitor();
 

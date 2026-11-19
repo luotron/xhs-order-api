@@ -2,7 +2,6 @@ const db = require('../db');
 const config = require('../config');
 const xhs = require('./xhsClient');
 const tokenManager = require('./tokenManager');
-const reportService = require('./reportService');
 
 const SUCCESS_ORDER_STATUS = 7; // 已完成（成功订单）
 
@@ -40,7 +39,7 @@ async function fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, orde
   return results;
 }
 
-/** 处理某店铺一个时间窗口：发现成功订单 → 去重入库 → 交给上报队列 */
+/** 处理某店铺一个时间窗口：发现成功订单 → 补全详情(金额等) → 去重入库 → 交给上报队列 */
 async function pollWindow(appId, sellerId, startTime, endTime) {
   const orders = await fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, SUCCESS_ORDER_STATUS);
   let fresh = 0;
@@ -59,6 +58,22 @@ async function pollWindow(appId, sellerId, startTime, endTime) {
     console.log(`[orderMonitor] 发现新成功订单 sellerId=${sellerId} 窗口内共${orders.length}条 新增${fresh}条`);
   }
   return { total: orders.length, fresh };
+}
+
+/** 为新捕获的成功订单补全订单详情（金额/快递等字段在 order.getOrderDetail 中才有） */
+async function enrichEventWithDetail(event) {
+  try {
+    const app = db.getApp(event.app_id);
+    const accessToken = await tokenManager.getValidAccessToken(event.app_id, event.seller_id);
+    const detail = await xhs.getOrderDetail(app, accessToken, event.order_id);
+    const base = JSON.parse(event.payload || '{}');
+    const merged = { ...base, detail };
+    db.updateOrderEvent(event.id, { payload: JSON.stringify(merged) });
+    return merged;
+  } catch (e) {
+    console.error(`[orderMonitor] 补全订单详情失败 orderId=${event.order_id} error=${e.message}`);
+    return JSON.parse(event.payload || '{}');
+  }
 }
 
 /** 获取所有已授权店铺（有 token 记录的） */
@@ -123,4 +138,4 @@ function startMonitor() {
   });
 }
 
-module.exports = { startMonitor, pollOnce, backfillOnce, listAuthorizedStores };
+module.exports = { startMonitor, pollOnce, backfillOnce, listAuthorizedStores, enrichEventWithDetail };

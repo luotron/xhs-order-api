@@ -63,18 +63,11 @@ function buildSummary(event) {
   const amountFen = detail.totalPayAmount ?? detail.merchantActualReceiveAmount ?? detail.totalDepositAmount ?? null;
   return {
     sellerId: event.seller_id,
-    appId: event.app_id,
     orderId: event.order_id,
-    orderStatus: event.order_status,
     shopName: store.name || event.seller_id,
-    amountFen: amountFen === null ? null : Number(amountFen),
     amountYuan: yuan(amountFen),
-    totalShippingFreeYuan: yuan(detail.totalShippingFree),
-    merchantActualReceiveYuan: yuan(detail.merchantActualReceiveAmount),
-    createdTime: fmtTime(payload.createdTime),
     paidTime: fmtTime(payload.paidTime),
     finishTime: fmtTime(payload.finishTime),
-    updateTime: fmtTime(payload.updateTime),
     expressTrackingNo: detail.expressTrackingNo || '',
     expressCompanyCode: detail.expressCompanyCode || '',
     receiver: [payload.receiverProvinceName, payload.receiverCityName, payload.receiverDistrictName]
@@ -116,24 +109,16 @@ async function reportEvent(event) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      // TODO: 上报接口待定 —— 参数结构按下面这个 payload 对齐，接口定稿后替换此段即可
+      // TODO: 上报接口待定 —— 简化后的平铺参数结构，接口定稿后按此对接
       const reportParams = {
         sellerId: summary.sellerId,
-        appId: summary.appId,
         orderId: summary.orderId,
-        orderStatus: summary.orderStatus,
-        summary: {
-          shopName: summary.shopName,
-          amountFen: summary.amountFen,
-          amountYuan: summary.amountYuan,
-          totalShippingFreeYuan: summary.totalShippingFreeYuan,
-          merchantActualReceiveYuan: summary.merchantActualReceiveYuan,
-          createdTime: summary.createdTime,
-          paidTime: summary.paidTime,
-          finishTime: summary.finishTime,
-          updateTime: summary.updateTime,
-        },
-        order: enrichedPayload,
+        shopName: summary.shopName,
+        amount: summary.amountYuan,            // 实付金额（元，两位小数）
+        paidTime: summary.paidTime,            // 支付时间 YYYY-MM-DD HH:mm:ss
+        finishTime: summary.finishTime,        // 完成时间 YYYY-MM-DD HH:mm:ss
+        expressCompanyCode: summary.expressCompanyCode || undefined,
+        expressTrackingNo: summary.expressTrackingNo || undefined,
       };
 
       if (config.reportUrl) {

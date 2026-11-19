@@ -186,31 +186,31 @@ POST /api/order/list
 [report] 快递: shentong 770360276716845 | 收件: 黑龙江省齐齐哈尔市铁锋区
 ```
 
-**上报参数结构**（TODO：接口待定，当前打印在日志，`REPORT_URL` 配置后自动 POST 该结构）：
+**上报参数结构**（简化平铺，TODO：接口待定，当前打印在日志，`REPORT_URL` 配置后自动 POST 该结构）：
 
 ```json
 {
   "sellerId": "6a8975834a2c710015a232d3",
-  "appId": "a1e389d4fbcc47188600",
   "orderId": "P810472712429350281",
-  "orderStatus": 7,
-  "summary": {
-    "shopName": "麦麦皮皮的店",
-    "amountFen": 19998,
-    "amountYuan": "199.98",
-    "totalShippingFreeYuan": "0.00",
-    "merchantActualReceiveYuan": "199.98",
-    "createdTime": "2026-11-17 21:05:12",
-    "paidTime": "2026-11-17 21:11:07",
-    "finishTime": "2026-11-18 15:18:55",
-    "updateTime": "2026-11-19 20:10:42"
-  },
-  "order": {
-    "...": "订单列表接口的完整字段（见下方字段说明）",
-    "detail": { "...": "订单详情接口补全的完整字段（金额/快递/商品明细等）" }
-  }
+  "shopName": "麦麦皮皮的店",
+  "amount": "199.98",
+  "paidTime": "2026-11-17 21:11:07",
+  "finishTime": "2026-11-18 15:18:55",
+  "expressCompanyCode": "shentong",
+  "expressTrackingNo": "770360276716845"
 }
 ```
+
+| 字段 | 说明 |
+|---|---|
+| `sellerId` | 店铺ID |
+| `orderId` | 订单号 |
+| `shopName` | 店铺名 |
+| `amount` | 实付金额（元，两位小数字符串） |
+| `paidTime` | 支付时间（`YYYY-MM-DD HH:mm:ss`） |
+| `finishTime` | 完成时间（`YYYY-MM-DD HH:mm:ss`） |
+| `expressCompanyCode` | 快递公司编码（无快递时不带该字段） |
+| `expressTrackingNo` | 快递单号（无快递时不带该字段） |
 
 相关配置（.env）：
 
@@ -307,14 +307,7 @@ POST /api/order/list
 | `unpack` | boolean | 是否拆包裹 |
 | `logisticsMode` | integer | 物流模式（平台枚举） |
 
-### 上报摘要字段（summary）
-
-| 字段 | 说明 |
-|---|---|
-| `amountFen` / `amountYuan` | 实付金额：分 / 元（两位小数字符串） |
-| `totalShippingFreeYuan` | 运费（元） |
-| `merchantActualReceiveYuan` | 商家实际收款（元） |
-| `createdTime` / `paidTime` / `finishTime` / `updateTime` | 已格式化为 `YYYY-MM-DD HH:mm:ss` |
+（上报参数为简化平铺结构，字段说明见上文「上报参数结构」）
 
 ## curl 测试示例（PowerShell，线上域名）
 

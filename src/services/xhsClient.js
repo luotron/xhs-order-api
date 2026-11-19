@@ -21,8 +21,19 @@ class XhsApiError extends Error {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 瞬时网络错误（可安全重试，无响应到达） */
+const TRANSIENT_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'ERR_SOCKET_CLOSED']);
+
+function isTransientError(e) {
+  return !e.response && (TRANSIENT_CODES.has(e.code) || /socket hang up/i.test(e.message || ''));
+}
+
 /**
  * 调用小红书开放平台网关
+ * 网络级瞬时错误（连接重置/超时等）自动重试 3 次（500ms/1500ms 退避），
+ * 业务错误码不重试，抛 XhsApiError。
  * @param {string} method   接口名，如 order.getOrderDetail
  * @param {object} params   业务参数
  * @param {object} app      { appId, appSecret, gateway }
@@ -43,15 +54,29 @@ async function callGateway(method, params, app, accessToken) {
   if (accessToken) body.accessToken = accessToken;
 
   const gateway = app.gateway || config.gateway;
-  const resp = await axios.post(gateway, body, {
-    headers: { 'Content-Type': 'application/json;charset=utf-8' },
-    timeout: 15000,
-  });
-  const data = resp.data || {};
-  if (data.success !== true || data.error_code !== 0) {
-    throw new XhsApiError(data.error_code, data.error_msg || '未知错误', data);
+  const maxAttempts = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const resp = await axios.post(gateway, body, {
+        headers: { 'Content-Type': 'application/json;charset=utf-8' },
+        timeout: 15000,
+      });
+      const data = resp.data || {};
+      if (data.success !== true || data.error_code !== 0) {
+        throw new XhsApiError(data.error_code, data.error_msg || '未知错误', data);
+      }
+      return data.data;
+    } catch (e) {
+      if (e instanceof XhsApiError) throw e;
+      if (isTransientError(e) && attempt < maxAttempts) {
+        const wait = attempt === 1 ? 500 : 1500;
+        console.warn(`[xhsClient] 网关瞬时网络错误 ${e.code || e.message}，${wait}ms 后重试 (${attempt}/${maxAttempts}) method=${method}`);
+        await sleep(wait);
+        continue;
+      }
+      throw e;
+    }
   }
-  return data.data;
 }
 
 /** 用授权 code 换取 accessToken（oauth.getAccessToken） */

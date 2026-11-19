@@ -101,6 +101,8 @@ async function pollOnce() {
       console.error(`[orderMonitor] 轮询失败 sellerId=${sellerId} error=${e.message}`);
       summary.push({ sellerId, error: e.message });
     }
+    // 店铺间错峰 300ms，降低突发请求被网关限流/重置的概率
+    await new Promise((r) => setTimeout(r, 300));
   }
   return summary;
 }

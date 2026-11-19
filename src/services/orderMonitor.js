@@ -3,13 +3,16 @@ const config = require('../config');
 const xhs = require('./xhsClient');
 const tokenManager = require('./tokenManager');
 
-const SUCCESS_ORDER_STATUS = 7; // 已完成（成功订单）
+/** 判断订单是否已支付：paidTime > 0 即支付成功（状态 1 待付款的订单 paidTime 为空） */
+function isPaid(order) {
+  return !!order.paidTime && Number(order.paidTime) > 0;
+}
 
 /**
- * 拉取店铺指定更新时间窗口内、指定状态的订单（自动翻页，最大 100 页保护）
+ * 拉取店铺指定更新时间窗口内的全部订单（自动翻页，最大 100 页保护）
  * 平台限制：timeType=2（更新时间）窗口 ≤30 分钟
  */
-async function fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, orderStatus) {
+async function fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime) {
   const app = db.getApp(appId);
   let accessToken = await tokenManager.getValidAccessToken(appId, sellerId);
 
@@ -19,7 +22,7 @@ async function fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, orde
   const maxPages = 100;
 
   while (pageNo <= maxPages) {
-    const params = { startTime, endTime, timeType: 2, orderStatus, pageNo, pageSize };
+    const params = { startTime, endTime, timeType: 2, orderStatus: 0, pageNo, pageSize };
     let data;
     try {
       data = await xhs.getOrderList(app, accessToken, params);
@@ -39,12 +42,12 @@ async function fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, orde
   return results;
 }
 
-/** 处理某店铺一个时间窗口：发现成功订单 → 补全详情(金额等) → 去重入库 → 交给上报队列 */
+/** 处理某店铺一个时间窗口：发现已支付订单 → 去重入库 → 交给上报队列（上报时补全金额等详情） */
 async function pollWindow(appId, sellerId, startTime, endTime) {
-  const orders = await fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime, SUCCESS_ORDER_STATUS);
+  const orders = await fetchOrdersByUpdateTime(appId, sellerId, startTime, endTime);
   let fresh = 0;
   for (const o of orders) {
-    if (o.orderStatus !== SUCCESS_ORDER_STATUS) continue;
+    if (!isPaid(o)) continue; // 待付款/未支付订单不触发上报
     const inserted = db.insertOrderEvent({
       sellerId,
       appId,
@@ -55,7 +58,7 @@ async function pollWindow(appId, sellerId, startTime, endTime) {
     if (inserted) fresh++;
   }
   if (fresh > 0) {
-    console.log(`[orderMonitor] 发现新成功订单 sellerId=${sellerId} 窗口内共${orders.length}条 新增${fresh}条`);
+    console.log(`[orderMonitor] 发现新支付订单 sellerId=${sellerId} 窗口内共${orders.length}条 新增${fresh}条`);
   }
   return { total: orders.length, fresh };
 }
@@ -108,7 +111,7 @@ async function pollOnce() {
 }
 
 /**
- * 启动时回填：最近 N 分钟（默认60）的已完成订单。
+ * 启动时回填：最近 N 分钟（默认60）的已支付订单。
  * 因平台单窗口上限 30 分钟，按 30 分钟切片补查，跨过当前轮询窗口的部分需分段。
  */
 async function backfillOnce() {
@@ -116,7 +119,7 @@ async function backfillOnce() {
   const now = Math.floor(Date.now() / 1000);
   const total = config.monitorBackfillMinutes;
   const chunk = config.monitorWindowMinutes; // 30
-  console.log(`[orderMonitor] 启动回填最近${total}分钟已完成订单，店铺数=${stores.length}`);
+  console.log(`[orderMonitor] 启动回填最近${total}分钟已支付订单，店铺数=${stores.length}`);
   for (const { appId, sellerId } of stores) {
     try {
       for (let from = now - total * 60; from < now; from += chunk * 60) {
@@ -136,7 +139,7 @@ function startMonitor() {
     setInterval(() => {
       pollOnce().catch((e) => console.error('[orderMonitor] 轮询异常', e.message));
     }, config.monitorIntervalMs);
-    console.log(`[orderMonitor] 监听已启动：每 ${config.monitorIntervalMs / 1000}s 轮询所有店铺最近 ${config.monitorWindowMinutes} 分钟更新的已完成订单`);
+    console.log(`[orderMonitor] 监听已启动：每 ${config.monitorIntervalMs / 1000}s 轮询所有店铺最近 ${config.monitorWindowMinutes} 分钟更新的订单，支付成功(paidTime>0)即触发上报`);
   });
 }
 

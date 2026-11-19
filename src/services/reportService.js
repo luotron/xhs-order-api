@@ -77,7 +77,7 @@ function buildSummary(event) {
 
 /** 打印一条订单的表格日志（单号/店铺/金额/时间） */
 function logOrderTable(event, summary) {
-  console.log('[report] ── 监听到成功订单，明细如下 ──');
+  console.log('[report] ── 监听到支付成功订单，明细如下 ──');
   console.log(renderOrderTable([
     {
       orderId: summary.orderId,

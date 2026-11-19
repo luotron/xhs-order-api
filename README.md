@@ -26,18 +26,18 @@ npm test           # 校验签名算法与官方示例一致
 | `APP_REDIRECT_URI` | 与开放平台控制台配置的应用授权回调地址一致 |
 | `XHS_GATEWAY` | 生产默认 `https://ark.xiaohongshu.com/ark/open_api/v3/common_controller` |
 
-## 整体流程：平台侧 vs 本服务侧（为什么平台有店铺，还要"注册店铺"）
+## 整体流程：平台侧 vs 本服务侧（为什么平台有店铺，服务还要留记录）
 
 关键理解：**小红书开放平台控制台里看到的店铺，和本服务数据库里的店铺，是两份不同的记录**，各管各的事。
 
 | | 小红书平台（控制台） | 本服务（本地 SQLite） |
 |---|---|---|
-| 记录内容 | 应用绑定了哪些店铺（授权关系） | 店铺映射（sellerId ↔ storeCode）+ 每店 token |
+| 记录内容 | 应用绑定了哪些店铺（授权关系） | 店铺信息（sellerId/店铺名）+ 每店 token |
 | 谁能写 | 平台：主账号点授权时写入 | 本服务：你调接口写入 |
 | 谁能读 | 你（控制台页面） | 本服务接口 |
 | 平台提供读取 API 吗 | **不提供**（控制台那个"授权列表"是网页内部接口，需要开发者登录态，不能用于服务器） | — |
 
-所以：平台只负责"某店授权给了某应用"，但它**不会把授权关系推给你的服务器**，你的服务器必须自己留一份店铺清单和 token。`POST /api/stores`（注册店铺）就是把"我要管理哪家店、它的 sellerId、给它起个 storeCode"记录到本地库——这一步是**告诉本服务**，不是去平台开新店，对平台没有任何影响。
+所以：平台只负责"某店授权给了某应用"，但它**不会把授权关系推给你的服务器**。本服务在授权回调换 token 时**自动登记店铺**（sellerId、店铺名入库），不需要任何手动注册步骤。
 
 ### 完整生命周期
 
@@ -45,18 +45,18 @@ npm test           # 校验签名算法与官方示例一致
 ① 平台侧：控制台"授权管理"→ 添加授权店铺（输入 sellerId）
    作用：让平台知道这家店允许被你的应用授权
 
-② 服务侧：POST /api/stores 注册店铺（sellerId + storeCode）
-   作用：让本服务知道要管理这家店，建立本地映射
+② 生成授权链接：GET /api/auth-url（或控制台"复制授权链接"）
+   发给店铺主账号在浏览器打开点"授权"
    ↓
-③ 授权：店铺主账号打开授权链接点"授权"
-   平台生成 code → 302 跳到回调地址
+③ 平台生成 code → 302 跳到回调地址
    ↓
 ④ 服务侧：GET /callback/xhs/oauth?code=xxx（或 POST /api/oauth/exchange）
-   code → accessToken/refreshToken → 持久化到 credentials 表 → 店铺标记已授权
+   code → accessToken/refreshToken → 持久化到 credentials 表
+   → 服务自动登记店铺（sellerId/店铺名入库，无需手动注册）
    ↓
 ⑤ 运行期（全自动）：
    - token 到期前自动刷新续期
-   - 查订单状态 / 订单列表：按 sellerId 或 storeCode 查询
+   - 查订单状态 / 订单列表：按 sellerId 查询
    - 成功订单监听：每 10 秒轮询所有店铺已完成订单 → 去重 → 上报（失败重试3次）
 ```
 
@@ -78,7 +78,7 @@ npm test           # 校验签名算法与官方示例一致
 | `timestamp` / `sign` | **每次请求动态计算**，无需维护。`sign = md5(method + "?" + 按字典序排列的 appId/timestamp/version + appSecret)`，accessToken 不参与签名 |
 | 每店铺 `accessToken` | **自动维护**（`credentials` 表）：授权时入库；快过期（默认提前10分钟）由后台调度自动用 refreshToken 刷新；调用中遇到失效会即时刷新重试一次 |
 | 每店铺 `refreshToken` | 刷新时随平台响应更新入库（平台每次刷新都会下发新的 refreshToken 并重置授权到期时间） |
-| 店铺映射 | `stores` 表：sellerId（平台店铺ID）+ 自定义 storeCode（业务标识），支持两种方式查询 |
+| 店铺登记 | **授权回调自动完成**：换 token 成功后 stores 表自动写入 sellerId + 店铺名，无需手动注册 |
 
 ## 接口清单
 
@@ -87,15 +87,14 @@ npm test           # 校验签名算法与官方示例一致
 | 概念 | 说明 | 示例 |
 |---|---|---|
 | `sellerId` | 小红书**店铺ID**（平台唯一标识），控制台-授权管理可查看，或千帆后台→店铺→店铺账号信息 | `6a8975834a2c710015a232d3` |
-| `storeCode` | 本服务注册店铺时设置的自定义标识，与 sellerId 等价使用，二选一 | `maimai` |
-| `orderId` | 订单号（以 P 开头），由订单列表接口返回 | `P810431500196403651` |
+| `orderId` | 订单号（以 P 开头），由订单列表接口返回 | `P810472712429350281` |
+| 店铺注册 | **无需手动注册**：控制台添加授权店铺后，主账号点授权，回调换 token 时服务自动登记店铺 | - |
 | 时间参数 | 由**后端自动计算**（lastHours/lastMinutes），前端无需传 Unix 时间戳 | - |
 
 ### 1. 订单状态查询（核心接口）
 
 ```
 GET /api/order/status?sellerId=xxx&orderId=Pxxxx
-GET /api/order/status?storeCode=maimai&orderId=Pxxxx
 ```
 
 响应示例：
@@ -104,17 +103,17 @@ GET /api/order/status?storeCode=maimai&orderId=Pxxxx
 {
   "success": true,
   "data": {
-    "store": { "sellerId": "68c11b4b047ce6002a1f33c6", "storeCode": "testshop", "name": "测试店铺" },
-    "orderId": "P810431500196403651",
-    "orderStatus": 6,
-    "orderStatusText": "待收货",
+    "store": { "sellerId": "6a8975834a2c710015a232d3", "name": "麦麦皮皮的店" },
+    "orderId": "P810472712429350281",
+    "orderStatus": 7,
+    "orderStatusText": "已完成",
     "orderAfterSalesStatus": 1,
     "orderAfterSalesStatusText": "无售后",
     "cancelStatus": 0,
-    "createdTime": 1794879512753,
-    "paidTime": 1794879513000,
-    "updateTime": 1794882548829,
-    "expressTrackingNo": null,
+    "createdTime": 1794920712642,
+    "paidTime": 1794921067000,
+    "updateTime": 1795090242558,
+    "expressTrackingNo": "770360276716845",
     "detail": { "...": "平台原始完整字段" }
   }
 }
@@ -130,15 +129,15 @@ POST /api/order/list
 时间参数**由后端计算**，前端只需传查多少小时内的订单：
 
 ```json
-{ "storeCode": "maimai", "lastHours": 24 }      // 最近24小时内创建/更新的订单（默认24，≤24）
-{ "sellerId": "xxx", "lastMinutes": 30 }        // 最近30分钟内"更新过"的订单（≤30，用于增量拉取）
+{ "sellerId": "xxx", "lastHours": 24 }        // 最近24小时内创建/更新的订单（默认24，≤24）
+{ "sellerId": "xxx", "lastMinutes": 30 }      // 最近30分钟内"更新过"的订单（≤30，用于增量拉取）
 ```
 
 完整入参说明：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `sellerId` / `storeCode` | string | 二选一 | 店铺ID / 自定义店铺标识 |
+| `sellerId` | string | 必填 | 店铺ID |
 | `lastHours` | number | 否 | 查最近 N 小时的订单，默认 24，上限 24（平台限制，按创建时间） |
 | `lastMinutes` | number | 否 | 查最近 N 分钟"更新过"的订单，上限 30（平台限制，按更新时间） |
 | `orderType` | number | 否 | 订单类型：0全部 1现货 2定金预售 3全款预售(废弃) 4全款预售(新) 5换货补发 |
@@ -153,7 +152,7 @@ POST /api/order/list
 
 | 接口 | 说明 |
 |---|---|
-| `GET /api/stores/:sellerId/auth-url` | 生成店铺授权链接（发给店铺主账号打开） |
+| `GET /api/auth-url` | 生成店铺授权链接（发给店铺主账号打开，授权后自动登记店铺并换 token） |
 | `GET /callback/xhs/oauth?code=xxx` | 控制台回调地址指向本服务时接收 code 自动换 token |
 | `POST /api/oauth/exchange` `{code}` | **手动换 token**：现有订单系统回调里收到 code 后调用此接口完成托管 |
 | `POST /api/stores/:sellerId/refresh` | 手动强制刷新某店铺 token |
@@ -197,7 +196,6 @@ POST /api/order/list
   "orderStatus": 7,
   "summary": {
     "shopName": "麦麦皮皮的店",
-    "storeCode": "maimai",
     "amountFen": 19998,
     "amountYuan": "199.98",
     "totalShippingFreeYuan": "0.00",
@@ -229,18 +227,17 @@ POST /api/order/list
 
 | 接口 | 说明 |
 |---|---|
-| `POST /api/stores` `{sellerId, storeCode, name}` | 注册店铺（sellerId 必填，storeCode 为自定义标识） |
-| `GET /api/stores` | 店铺列表（含 token 有效性） |
+| `GET /api/stores` | 店铺列表（含 token 有效性；店铺由授权回调自动登记） |
 | `DELETE /api/stores/:sellerId` | 删除店铺及其凭证 |
 | `POST /api/apps` `{appId, appSecret, redirectUri, name}` | 注册更多应用（多应用场景） |
 
 ## 真实店铺授权步骤
 
 1. 控制台 → 应用管理 → 授权管理 → 输入店铺 ID（千帆-店铺账号信息里的 sellerId）→ 添加授权店铺
-2. 获取授权链接（或本服务 `GET /api/stores/:sellerId/auth-url`），发给店铺**主账号**在浏览器打开并点授权
+2. 获取授权链接（本服务 `GET /api/auth-url` 或控制台"复制授权链接"），发给店铺**主账号**在浏览器打开并点授权
 3. 平台 302 跳转到回调地址并携带 `code`（10 分钟有效）
-   - 若回调指向本服务：自动换 token 入库
-   - 若回调指向你的订单系统 `https://ark.xiaohongshu.com/app-order/order/query`：在该页面解析出 `code` 后调用本服务 `POST /api/oauth/exchange` 完成托管
+   - 若回调指向本服务：自动换 token 入库 + 自动登记店铺
+   - 若回调指向你的订单系统：在该页面解析出 `code` 后调用本服务 `POST /api/oauth/exchange` 完成托管
 4. 之后 token 全程自动维护，直接调订单接口即可
 
 ## 订单状态码对照（orderStatus）
@@ -319,19 +316,23 @@ POST /api/order/list
 | `merchantActualReceiveYuan` | 商家实际收款（元） |
 | `createdTime` / `paidTime` / `finishTime` / `updateTime` | 已格式化为 `YYYY-MM-DD HH:mm:ss` |
 
-## curl 测试示例（PowerShell）
+## curl 测试示例（PowerShell，线上域名）
 
 ```powershell
 # 订单列表：最近24小时，最多10条（时间由后端算）
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8899/api/order/list `
+Invoke-RestMethod -Method Post -Uri https://exclusion8311.z2kq7vm9xr.top/api/order/list `
   -ContentType 'application/json' `
-  -Body '{"sellerId":"68c11b4b047ce6002a1f33c6","lastHours":24,"pageSize":10}' | ConvertTo-Json -Depth 5
-
-# 订单状态：按店铺标识+订单号
-Invoke-RestMethod -Uri "http://127.0.0.1:8899/api/order/status?storeCode=testshop&orderId=P810431500196403651" | ConvertTo-Json -Depth 3
+  -Body '{"sellerId":"6a8975834a2c710015a232d3","lastHours":24,"pageSize":10}' | ConvertTo-Json -Depth 5
 
 # 订单状态：按店铺ID+订单号
-Invoke-RestMethod -Uri "http://127.0.0.1:8899/api/order/status?sellerId=68c11b4b047ce6002a1f33c6&orderId=P810431500196403651" | ConvertTo-Json -Depth 3
+Invoke-RestMethod -Uri "https://exclusion8311.z2kq7vm9xr.top/api/order/status?sellerId=6a8975834a2c710015a232d3&orderId=P810472712429350281" | ConvertTo-Json -Depth 3
+
+# 生成店铺授权链接
+Invoke-RestMethod -Uri "https://exclusion8311.z2kq7vm9xr.top/api/auth-url?appId=a1e389d4fbcc47188600" | ConvertTo-Json
+
+# 授权回调收到 code 后托管 token
+Invoke-RestMethod -Method Post -Uri https://exclusion8311.z2kq7vm9xr.top/api/oauth/exchange `
+  -ContentType 'application/json' -Body '{"code":"code-xxxx"}' | ConvertTo-Json
 ```
 
 ## ApiPost 一键导入
@@ -341,11 +342,11 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8899/api/order/status?sellerId=68c11b4b
 1. `小红书订单API.postman_collection.json` — 接口集合（已按文件夹分组）
 2. `小红书订单API环境.postman_environment.json` — 环境变量
 
-导入步骤：ApiPost 客户端 → 导入 → Postman 格式 → 依次导入上面两个文件 → 右上角环境切换选择「小红书订单API-本地环境」。
+导入步骤：ApiPost 客户端 → 导入 → Postman 格式 → 依次导入上面两个文件 → 右上角环境切换选择「小红书订单API-线上环境」。
 
 集合分组：`1-基础`、`2-店铺管理`、`3-授权与Token`、`4-订单查询`。
 
-环境变量（可在 ApiPost 环境管理里修改）：`baseUrl`、`appId`、`sellerId`、`storeCode`、`storeName`、`orderId`、`authCode`。
+环境变量（可在 ApiPost 环境管理里修改）：`baseUrl`（默认 `https://exclusion8311.z2kq7vm9xr.top`）、`appId`、`sellerId`、`orderId`、`authCode`。
 
 ## PM2 部署
 
@@ -378,4 +379,4 @@ pm2 status            # 查看状态
 - [x] 测试店铺 code 换取 accessToken 成功
 - [x] `oauth.refreshToken` 刷新成功并更新有效期（约 7 天）
 - [x] `order.getOrderList` 返回真实订单
-- [x] `order.getOrderDetail` 按 storeCode / sellerId + 订单号查询状态成功
+- [x] `order.getOrderDetail` 按 sellerId + 订单号查询状态成功

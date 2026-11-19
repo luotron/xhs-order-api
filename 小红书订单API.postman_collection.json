@@ -2,7 +2,7 @@
 	"info": {
 		"_postman_id": "xhs-order-api-001",
 		"name": "小红书订单API服务",
-		"description": "小红书开放平台多店铺授权管理与订单状态查询服务。导入 ApiPost：导入 → Postman格式 → 本文件 + 环境文件。",
+		"description": "小红书开放平台多店铺授权管理与订单状态查询服务。店铺通过授权链接授权后自动注册，无需手动注册。导入 ApiPost：导入 → Postman格式 → 本文件 + 环境文件。",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
@@ -27,24 +27,6 @@
 			"name": "2-店铺管理",
 			"item": [
 				{
-					"name": "注册店铺",
-					"request": {
-						"method": "POST",
-						"header": [
-							{ "key": "Content-Type", "value": "application/json" }
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"sellerId\": \"{{sellerId}}\",\n  \"storeCode\": \"{{storeCode}}\",\n  \"name\": \"{{storeName}}\"\n}"
-						},
-						"url": {
-							"raw": "{{baseUrl}}/api/stores",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "stores"]
-						}
-					}
-				},
-				{
 					"name": "店铺列表",
 					"request": {
 						"method": "GET",
@@ -65,9 +47,9 @@
 						"method": "GET",
 						"header": [],
 						"url": {
-							"raw": "{{baseUrl}}/api/stores/{{sellerId}}/auth-url?appId={{appId}}",
+							"raw": "{{baseUrl}}/api/auth-url?appId={{appId}}",
 							"host": ["{{baseUrl}}"],
-							"path": ["api", "stores", "{{sellerId}}", "auth-url"],
+							"path": ["api", "auth-url"],
 							"query": [
 								{ "key": "appId", "value": "{{appId}}" }
 							]
@@ -176,22 +158,6 @@
 					}
 				},
 				{
-					"name": "订单状态-按店铺标识",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{baseUrl}}/api/order/status?storeCode={{storeCode}}&orderId={{orderId}}",
-							"host": ["{{baseUrl}}"],
-							"path": ["api", "order", "status"],
-							"query": [
-								{ "key": "storeCode", "value": "{{storeCode}}" },
-								{ "key": "orderId", "value": "{{orderId}}" }
-							]
-						}
-					}
-				},
-				{
 					"name": "订单列表-最近24小时",
 					"request": {
 						"method": "POST",
@@ -218,7 +184,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"storeCode\": \"{{storeCode}}\",\n  \"lastMinutes\": 30,\n  \"pageSize\": 20\n}"
+							"raw": "{\n  \"sellerId\": \"{{sellerId}}\",\n  \"lastMinutes\": 30,\n  \"pageSize\": 20\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/order/list",

@@ -85,23 +85,18 @@ function listApps() {
   return db.prepare('SELECT app_id, name, redirect_uri, gateway FROM apps').all();
 }
 
-function upsertStore({ sellerId, appId, storeCode = '', name = '' }) {
+function upsertStore({ sellerId, appId, name = '' }) {
   db.prepare(`
     INSERT INTO stores (seller_id, app_id, store_code, name, updated_at)
-    VALUES (@sellerId, @appId, @storeCode, @name, @now)
+    VALUES (@sellerId, @appId, '', @name, @now)
     ON CONFLICT(seller_id, app_id) DO UPDATE SET
-      store_code = COALESCE(NULLIF(excluded.store_code, ''), stores.store_code),
       name = COALESCE(NULLIF(excluded.name, ''), stores.name),
       updated_at = excluded.updated_at
-  `).run({ sellerId, appId, storeCode, name, now: Date.now() });
+  `).run({ sellerId, appId, name, now: Date.now() });
 }
 
 function getStore(sellerId, appId) {
   return db.prepare('SELECT * FROM stores WHERE seller_id = ? AND app_id = ?').get(sellerId, appId);
-}
-
-function getStoreByCode(storeCode, appId) {
-  return db.prepare('SELECT * FROM stores WHERE store_code = ? AND app_id = ?').get(storeCode, appId);
 }
 
 function listStores(appId) {
@@ -204,7 +199,6 @@ module.exports = {
   listApps,
   upsertStore,
   getStore,
-  getStoreByCode,
   listStores,
   setAuthStatus,
   saveCredential,
@@ -214,7 +208,6 @@ module.exports = {
   saveTestCode,
   getLatestTestCode,
   insertOrderEvent,
-  getOrderEvent,
   listPendingOrderEvents,
   listFailedOrderEvents,
   updateOrderEvent,

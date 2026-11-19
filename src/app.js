@@ -32,15 +32,8 @@ app.post('/api/apps', (req, res) => {
 });
 
 // ---------- 店铺管理 ----------
-app.post('/api/stores', (req, res) => {
-  const { sellerId, storeCode, name } = req.body || {};
-  const appId = getAppId(req);
-  if (!appId) return res.status(400).json({ success: false, error: '缺少 appId' });
-  if (!sellerId) return res.status(400).json({ success: false, error: 'sellerId 必填（店铺ID）' });
-  db.upsertStore({ sellerId: String(sellerId), appId, storeCode: storeCode || '', name: name || '' });
-  res.json({ success: true, data: db.getStore(String(sellerId), appId) });
-});
-
+// 说明：店铺不再需要手动注册。控制台添加授权店铺后，主账号在授权页点授权，
+// 回调 /callback/xhs/oauth 换 token 时服务会自动登记店铺（sellerId/店铺名入库）。
 app.get('/api/stores', (req, res) => {
   const appId = getAppId(req);
   if (!appId) return res.status(400).json({ success: false, error: '缺少 appId' });
@@ -56,7 +49,8 @@ app.get('/api/stores', (req, res) => {
   res.json({ data: stores });
 });
 
-app.get('/api/stores/:sellerId/auth-url', (req, res) => {
+/** 生成店铺授权链接（发给店铺主账号打开，授权后自动回调注册店铺并换 token） */
+app.get('/api/auth-url', (req, res) => {
   const appId = getAppId(req);
   const appInfo = db.getApp(appId);
   if (!appInfo) return res.status(404).json({ success: false, error: '应用不存在' });
@@ -151,26 +145,26 @@ app.post('/api/token/sweep', asyncH(async (req, res) => {
 
 // ---------- 订单查询 ----------
 /**
- * GET /api/order/status?sellerId=xxx&orderId=Pxxxx 或 ?storeCode=xxx&orderId=Pxxxx
+ * GET /api/order/status?sellerId=xxx&orderId=Pxxxx
  * 返回标准化订单状态
  */
 app.get('/api/order/status', asyncH(async (req, res) => {
-  const { sellerId, storeCode, orderId } = req.query;
-  if (!sellerId && !storeCode) return res.status(400).json({ success: false, error: 'sellerId 或 storeCode 至少一个' });
+  const { sellerId, orderId } = req.query;
+  if (!sellerId) return res.status(400).json({ success: false, error: '缺少店铺ID sellerId' });
   const appId = getAppId(req);
-  const data = await orderService.queryOrderStatus(appId, { sellerId, storeCode, orderId });
+  const data = await orderService.queryOrderStatus(appId, { sellerId, orderId });
   res.json({ success: true, data });
 }));
 
 /**
  * POST /api/order/list
  * 简化入参（时间由后端计算）：
- *   body: { sellerId | storeCode, lastHours?=24, lastMinutes?, orderType?, orderStatus?, pageNo?=1, pageSize?=50 }
+ *   body: { sellerId, lastHours?=24, lastMinutes?, orderType?, orderStatus?, pageNo?=1, pageSize?=50 }
  * 兼容入参：{ startTime, endTime, timeType, ... }
  */
 app.post('/api/order/list', asyncH(async (req, res) => {
-  const { sellerId, storeCode } = req.body || {};
-  if (!sellerId && !storeCode) return res.status(400).json({ success: false, error: 'sellerId 或 storeCode 至少一个' });
+  const { sellerId } = req.body || {};
+  if (!sellerId) return res.status(400).json({ success: false, error: '缺少店铺ID sellerId' });
   const appId = getAppId(req);
   const data = await orderService.queryOrderList(appId, req.body || {});
   res.json({ success: true, data });

@@ -66,8 +66,7 @@ function buildSummary(event) {
     appId: event.app_id,
     orderId: event.order_id,
     orderStatus: event.order_status,
-    shopName: store.name || store.store_code || event.seller_id,
-    storeCode: store.store_code || '',
+    shopName: store.name || event.seller_id,
     amountFen: amountFen === null ? null : Number(amountFen),
     amountYuan: yuan(amountFen),
     totalShippingFreeYuan: yuan(detail.totalShippingFree),
@@ -125,7 +124,6 @@ async function reportEvent(event) {
         orderStatus: summary.orderStatus,
         summary: {
           shopName: summary.shopName,
-          storeCode: summary.storeCode,
           amountFen: summary.amountFen,
           amountYuan: summary.amountYuan,
           totalShippingFreeYuan: summary.totalShippingFreeYuan,

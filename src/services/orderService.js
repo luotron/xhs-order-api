@@ -25,26 +25,17 @@ const AFTER_SALES_STATUS_TEXT = {
   7: '售后取消',
 };
 
-function resolveStore(appId, { sellerId, storeCode }) {
-  let store;
-  if (sellerId) {
-    store = db.getStore(String(sellerId), appId);
-  } else if (storeCode) {
-    store = db.getStoreByCode(String(storeCode), appId);
-  }
-  return store;
-}
-
 /**
- * 核心能力：根据 店铺ID 或 店铺标识 + 订单号 查询订单状态
+ * 核心能力：根据 店铺ID + 订单号 查询订单状态
  */
-async function queryOrderStatus(appId, { sellerId, storeCode, orderId }) {
+async function queryOrderStatus(appId, { sellerId, orderId }) {
+  if (!sellerId) throw new Error('缺少店铺ID sellerId');
   if (!orderId) throw new Error('缺少订单号 orderId');
-  const store = resolveStore(appId, { sellerId, storeCode });
-  if (!store) throw new Error('店铺不存在：请先在控制台添加授权店铺，或检查 sellerId/storeCode');
+  const store = db.getStore(String(sellerId), appId);
+  if (!store) throw new Error('店铺不存在：请先在控制台添加授权店铺并完成授权');
 
   const app = db.getApp(appId);
-  const accessToken = await tokenManager.getValidAccessToken(appId, store.seller_id);
+  let accessToken = await tokenManager.getValidAccessToken(appId, store.seller_id);
 
   let detail;
   try {
@@ -59,7 +50,7 @@ async function queryOrderStatus(appId, { sellerId, storeCode, orderId }) {
   }
 
   return {
-    store: { sellerId: store.seller_id, storeCode: store.store_code, name: store.name },
+    store: { sellerId: store.seller_id, name: store.name },
     orderId: detail.orderId,
     orderStatus: detail.orderStatus,
     orderStatusText: ORDER_STATUS_TEXT[detail.orderStatus] || `未知(${detail.orderStatus})`,
@@ -99,12 +90,13 @@ function resolveTimeRange(body) {
 
 /**
  * 订单列表（分页）
- * 入参：sellerId|storeCode、lastHours（默认24）/ lastMinutes、orderType、orderStatus、pageNo、pageSize
+ * 入参：sellerId、lastHours（默认24）/ lastMinutes、orderType、orderStatus、pageNo、pageSize
  */
 async function queryOrderList(appId, body) {
-  const { sellerId, storeCode, orderType, orderStatus } = body;
-  const store = resolveStore(appId, { sellerId, storeCode });
-  if (!store) throw new Error('店铺不存在');
+  const { sellerId, orderType, orderStatus } = body;
+  if (!sellerId) throw new Error('缺少店铺ID sellerId');
+  const store = db.getStore(String(sellerId), appId);
+  if (!store) throw new Error('店铺不存在：请先在控制台添加授权店铺并完成授权');
 
   const app = db.getApp(appId);
   let accessToken = await tokenManager.getValidAccessToken(appId, store.seller_id);
